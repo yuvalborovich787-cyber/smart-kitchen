@@ -600,4 +600,266 @@ function renderRec(){
 }
 
 function togStar(id,e){e.stopPropagation();if(starred.includes(id))starred=starred.filter(x=>x!==id);else starred.push(id);save();renderRec();showT(starred.includes(id)?'⭐ נוסף למועדפים':'הוסר ממועדפים')}
-function cycleScale(id){rec
+function cycleScale(id){recScale[id]=((recScale[id]||1)%3)+1;renderRec()}
+
+function markC(rid){
+  const r=REC.find(x=>x.id===rid);if(!r)return;
+  const sc=recScale[rid]||1;
+  r.ing.forEach(id=>{const i=inv.find(x=>x.id===id);if(i&&i.qty>0)i.qty=Math.max(0,i.qty-sc)});
+  todayProt=Math.round(todayProt+r.protein*sc);
+  hist.push({id:r.id,name:r.name,emoji:r.emoji,protein:r.protein*sc,date:TODAY.toISOString().slice(0,10)});
+  save();renderRec();
+  if(curV==='morning')renderMorning();
+  showT(`🍳 ${r.name} — +${r.protein*sc}ג׳ חלבון!`);
+  scheduleNotif();
+}
+
+function openCook(rid){
+  cmRec=REC.find(r=>r.id===rid);if(!cmRec)return;
+  cmStep=0;clearInterval(cmTimer);cmTimer=null;cmRunning=false;cmSecs=0;
+  document.getElementById('cm-emoji').textContent=cmRec.emoji;
+  document.getElementById('cm-name').textContent=cmRec.name;
+  document.getElementById('cook-mode').classList.add('open');
+  renderCookStep();
+}
+
+function renderCookStep(){
+  const steps=cmRec.steps,n=steps.length;
+  document.getElementById('cm-prog').style.width=((cmStep/n)*100)+'%';
+  const sl=document.getElementById('cm-steps-list');
+  sl.innerHTML=steps.map((s,i)=>`<div class="cm-step-item ${i===cmStep?'active':i<cmStep?'done':''}" onclick="goCookStep(${i})">${i+1}. ${s.substring(0,38)}${s.length>38?'...':''}</div>`).join('');
+  const cm=document.getElementById('cm-main');
+  if(cmStep>=n){
+    cm.innerHTML=`<div style="display:flex;flex-direction:column;align-items:center;gap:16px"><div style="font-size:80px">${cmRec.emoji}</div><div style="font-size:28px;font-weight:800;color:var(--gr)">מוכן לאכילה! 🎉</div><div style="font-size:14px;color:var(--t2)">${cmRec.name} — ${cmRec.protein}ג׳ חלבון למנה</div><button class="cm-next" onclick="markC(${cmRec.id});closeCook()" style="padding:12px 28px;border-radius:14px;border:none;font-family:'Heebo',sans-serif;font-size:14px;font-weight:700;cursor:pointer;background:var(--gr);color:#fff">✅ סמן כמבושל וסגור</button></div>`;
+    return;
+  }
+  const timer=cmRec.timers[cmStep]||0,hasTimer=timer>0;
+  const disp=hasTimer?(cmSecs>0?cmSecs:timer*60):0;
+  const mm=Math.floor(disp/60),ss=String(disp%60).padStart(2,'0');
+  cm.innerHTML=`<div class="cm-step-num">צעד ${cmStep+1} מתוך ${n}</div><div class="cm-ing"><b>מרכיבים בצעד זה:</b> ${cmRec.ingQty&&cmRec.ingQty[cmStep]?cmRec.ingQty[cmStep]:'לפי המתכון'}</div><div class="cm-step-text">${steps[cmStep]}</div>${hasTimer?`<div class="cm-timer-ring ${cmRunning?'running':''}" id="cm-ring" onclick="toggleTimer(${timer})"><div class="cm-timer-num">${mm}:${ss}</div><div class="cm-timer-lbl">${cmRunning?'לחץ לעצור':'לחץ להתחיל'}</div></div>`:''}<div class="cm-nav">${cmStep>0?`<button class="cm-nav-btn cm-prev" onclick="goCookStep(${cmStep-1})">← הקודם</button>`:''}<button class="cm-nav-btn cm-next" onclick="goCookStep(${cmStep+1})">${cmStep<n-1?'הבא →':'סיום ✓'}</button></div>`;
+}
+
+function goCookStep(i){
+  clearInterval(cmTimer);cmTimer=null;cmRunning=false;
+  cmStep=i;cmSecs=0;renderCookStep();
+}
+
+function toggleTimer(mins){
+  if(cmRunning){clearInterval(cmTimer);cmTimer=null;cmRunning=false;renderCookStep();return;}
+  if(cmSecs===0)cmSecs=mins*60;
+  cmRunning=true;
+  cmTimer=setInterval(()=>{
+    cmSecs--;
+    if(cmSecs<=0){clearInterval(cmTimer);cmTimer=null;cmRunning=false;cmSecs=0;showT('⏰ הטיימר הסתיים!');renderCookStep();return;}
+    const r=document.getElementById('cm-ring');
+    if(r){const mm=Math.floor(cmSecs/60),ss=String(cmSecs%60).padStart(2,'0');r.querySelector('.cm-timer-num').textContent=`${mm}:${ss}`;}
+  },1000);
+  renderCookStep();
+}
+
+function closeCook(){document.getElementById('cook-mode').classList.remove('open');clearInterval(cmTimer);cmTimer=null;cmRunning=false;}
+
+async function askToday(){
+  const btn=document.getElementById('td-btn'),res=document.getElementById('td-res');
+  btn.disabled=true;btn.textContent='⏳ מנתח...';res.style.display='block';
+  res.innerHTML='<span style="color:var(--t3)">שואל את ה-AI...</span>';
+  const uP=prefs[curU==='both'?'noga':curU];
+  const loved=INGS.filter(i=>uP&&uP.ingredients[i.id]==='loved').map(i=>i.n).join(', ');
+  const avoid=INGS.filter(i=>uP&&uP.ingredients[i.id]==='disliked').map(i=>i.n).join(', ');
+  const exp=inv.filter(i=>i.qty>0&&DL(i.exp)<=4).map(i=>`${i.emoji}${i.name}(${DL(i.exp)}ד)`).join(', ')||'אין';
+  const avail=inv.filter(i=>i.qty>0).map(i=>`${i.emoji}${i.name}x${i.qty}`).join(', ');
+  const diet=curU==='noga'?'צמחונית קפדנית':curU==='me'?'ללא דגים':'שניהם — נגה צמחונית, ללא דגים';
+  try{
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      model:'claude-sonnet-4-20250514',max_tokens:700,
+      system:`אתה שף ישראלי חכם. הצע מתכון אחד. חוקים: אסור דגים. ${diet}. פרופיל: אוהב ${loved||'הכל'}. נמנע מ: ${avoid||'כלום'}.
+פורמט:
+**🍽️ [שם]**
+**למה עכשיו:** [קשר לפגי תוקף]
+**⏱️ זמן:** X דק | **💪 חלבון:** ~Xג׳
+**מה צריך:** 4-5 פריטים
+**הכנה:**
+1. 2. 3. 4.
+**💡 טיפ:**`,
+      messages:[{role:'user',content:`פגי תוקף: ${exp}\nמלאי: ${avail}`}]
+    })});
+    const data=await r.json();
+    const txt=data.content?.find(c=>c.type==='text')?.text||'שגיאה';
+    res.innerHTML=txt.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>');
+  }catch(e){res.innerHTML='<span style="color:var(--re)">שגיאת חיבור</span>'}
+  btn.disabled=false;btn.innerHTML='🎲 מה לבשל היום?';
+}
+
+function buildTxt(){
+  const low=inv.filter(i=>i.qty<=1&&i.qty>0);
+  const urg=inv.filter(i=>DL(i.exp)<=3&&i.qty>0);
+  const miss=[];const seen=new Set();
+  REC.forEach(r=>r.ing.forEach(id=>{const i=inv.find(x=>x.id===id);if(i&&i.qty===0&&!seen.has(id)){miss.push(i);seen.add(id)}}));
+  let lines=['🛒 רשימת קניות — מטבח חכם',''];
+  if(urg.length){lines.push('🔴 דחוף:');urg.forEach(i=>lines.push(`  ${i.emoji} ${i.name}`));lines.push('')}
+  if(low.length){lines.push('🟡 אוזל:');low.forEach(i=>lines.push(`  ${i.emoji} ${i.name}`));lines.push('')}
+  if(miss.length){lines.push('📖 חסר למתכונים:');miss.forEach(i=>lines.push(`  ${i.emoji} ${i.name}`));lines.push('')}
+  if(shopEx.length){lines.push('➕ נוסף ידנית:');shopEx.forEach(t=>lines.push(`  • ${t}`));}
+  return lines.join('\n');
+}
+
+function renderShop(){
+  const sl=document.getElementById('shop-list');
+  const low=inv.filter(i=>i.qty<=1&&i.qty>0);
+  const urg=inv.filter(i=>DL(i.exp)<=3&&i.qty>0);
+  const miss=[];const seen=new Set();
+  REC.forEach(r=>r.ing.forEach(id=>{const i=inv.find(x=>x.id===id);if(i&&i.qty===0&&!seen.has(id)){miss.push(i);seen.add(id)}}));
+  const stap=[{name:'אבקת חלבון',emoji:'💪',id:101,price:0},{name:'חמאת שקדים',emoji:'🥜',id:102,price:0},{name:'אורז מלא',emoji:'🍚',id:103,price:0}];
+  sl.innerHTML=`
+    ${urg.length?`<div class="ssec"><div class="stitle">🔴 דחוף — פגי תוקף</div>${urg.map(i=>shtml(i,'פגי תוקף','var(--reb)','var(--re)')).join('')}</div>`:''}
+    <div class="ssec"><div class="stitle">מלאי נמוך</div>${low.length?low.slice(0,6).map(i=>shtml(i,'אוזל','var(--amb)','var(--am)')).join(''):'<div style="font-size:11px;color:var(--gr);padding:4px 0">✅ תקין</div>'}</div>
+    <div class="ssec"><div class="stitle">חסר למתכונים</div>${miss.length?miss.slice(0,4).map(i=>shtml(i,'מתכון','var(--pub)','var(--pu)')).join(''):'<div style="font-size:11px;color:var(--gr);padding:4px 0">✅ יש הכל!</div>'}</div>
+    <div class="ssec"><div class="stitle">הוסף ידנית</div><div style="display:flex;gap:5px;margin-bottom:7px"><input id="ex-in" class="fi" placeholder="פריט נוסף..." style="flex:1;padding:6px 10px;font-size:11px" onkeydown="if(event.key==='Enter')addEx()"/><button onclick="addEx()" style="padding:6px 11px;border-radius:9px;border:none;background:var(--gr);color:#fff;font-family:'Heebo',sans-serif;font-size:11px;font-weight:700;cursor:pointer">+</button></div>${shopEx.map((t,i)=>`<div class="si"><div class="sck">✓</div><span style="font-size:16px">📝</span><span class="sn">${t}</span><button onclick="rmEx(${i})" style="border:none;background:transparent;color:var(--t3);cursor:pointer;font-size:11px">✕</button></div>`).join('')}</div>
+    <div class="ssec"><div class="stitle">חומרי בסיס</div>${stap.map(i=>shtml(i,'בסיסי','var(--blb)','var(--bl)')).join('')}</div>`;
+  const allItems=[...urg,...low,...miss,...stap].filter((v,i,a)=>a.findIndex(x=>x.id===v.id)===i);
+  const totEst=allItems.filter(i=>!shopCk.includes(i.id)&&i.price>0).reduce((s,i)=>s+(i.price||0),0);
+  document.getElementById('sh-pnl').innerHTML=`<div class="stitle" style="margin-bottom:9px">📤 שיתוף ופעולות</div>${totEst>0?`<div class="tot"><span style="font-size:10px;font-weight:700;color:var(--gr)">סה"כ משוער</span><span style="font-size:15px;font-weight:800;color:var(--gr)">₪${totEst}</span></div>`:''}<button class="sbtn wa" onclick="shareWA()">📱 שלח ב-WhatsApp</button><button class="sbtn cp" onclick="copyList()">📋 העתק ללוח</button><button class="sbtn exb" onclick="exportData()">💾 גבה מלאי</button><button class="sbtn imb" onclick="document.getElementById('imp-file').click()">📥 ייבא גיבוי</button>`;
+  const sc2=document.getElementById('stats-col');
+  const tot2=inv.filter(i=>i.qty>0).length;
+  const expC=inv.filter(i=>DL(i.exp)<=3&&i.qty>0).length;
+  const wP=hist.filter(h=>{const d=new Date(h.date);d.setHours(0,0,0,0);return Math.round((TODAY-d)/86400000)<=7}).reduce((s,h)=>s+h.protein,0);
+  const canC=REC.filter(r=>canMake(r)).length;
+  sc2.innerHTML=`<div class="stc"><div class="stit">💪 חלבון השבוע</div><div class="sbig" style="color:var(--pu)">${wP}ג׳</div><div class="ssub">יעד: 840ג׳</div><div class="pb"><div class="pf" style="width:${Math.min(100,Math.round(wP/840*100))}%;background:var(--pu)"></div></div></div><div class="stc"><div class="stit">מלאי</div><div class="sbig">${tot2}</div><div class="ssub">פריטים</div></div><div class="stc"><div class="stit">⚠️ פגי תוקף</div><div class="sbig" style="color:${expC>0?'var(--re)':'var(--gr)'}">${expC}</div><div class="ssub">תוך 3 ימים</div></div><div class="stc"><div class="stit">✅ מתכונים זמינים</div><div class="sbig" style="color:var(--bl)">${canC}</div><div class="ssub">מתוך ${REC.length}</div></div>`;
+}
+
+function shtml(item,reason,bg,color){
+  const ck=shopCk.includes(item.id);
+  return`<div class="si ${ck?'chk':''}" onclick="togShop(${item.id})"><div class="sck">${ck?'✓':''}</div><span style="font-size:16px">${item.emoji}</span><span class="sn">${item.name}</span>${item.price?`<span class="spr">₪${item.price}</span>`:''}<span class="sr" style="background:${bg};color:${color}">${reason}</span></div>`;
+}
+
+function togShop(id){if(shopCk.includes(id))shopCk=shopCk.filter(x=>x!==id);else shopCk.push(id);save();renderShop()}
+function addEx(){const inp=document.getElementById('ex-in');const v=inp.value.trim();if(!v)return;shopEx.push(v);inp.value='';save();renderShop()}
+function rmEx(i){shopEx.splice(i,1);save();renderShop()}
+function shareWA(){window.open('https://wa.me/?text='+encodeURIComponent(buildTxt()),'_blank')}
+function copyList(){navigator.clipboard.writeText(buildTxt()).then(()=>showT('📋 הועתק!')).catch(()=>showT('לא הצלחנו'))}
+function exportData(){
+  const blob=new Blob([JSON.stringify({inventory:inv,history:hist,starred,prefs,exported:new Date().toLocaleDateString('he-IL')},null,2)],{type:'application/json'});
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download='kitchen-final-'+new Date().toISOString().slice(0,10)+'.json';a.click();showT('💾 גיבוי הורד!');
+}
+function importData(e){
+  const file=e.target.files[0];if(!file)return;
+  const reader=new FileReader();
+  reader.onload=ev=>{try{const data=JSON.parse(ev.target.result);if(data.inventory){inv=data.inventory;if(data.history)hist=data.history;if(data.starred)starred=data.starred;if(data.prefs)prefs=data.prefs;save();renderAll();showT('📥 גיבוי יובא! '+inv.length+' פריטים');}else showT('⚠️ קובץ לא תקין');}catch(err){showT('⚠️ שגיאה')}};
+  reader.readAsText(file);e.target.value='';
+}
+
+function renderProfile(){
+  const p=prefs[curProf];
+  document.getElementById('uc-n').classList.toggle('active',curProf==='noga');
+  document.getElementById('uc-m').classList.toggle('active',curProf==='me');
+  Object.keys(p.sliders).forEach(k=>{
+    const el=document.getElementById('sl-'+k);if(el)el.value=p.sliders[k];
+    const sv=document.getElementById('sv-'+k);if(sv)sv.textContent=SL_LABS[k][p.sliders[k]-1];
+  });
+  document.getElementById('cuis-grid').innerHTML=CUISINES.map(c=>{
+    const st=p.cuisines[c.id]||'neutral';
+    return`<div class="ci ${st==='loved'?'loved':st==='disliked'?'disliked':''}" onclick="togCuis('${c.id}')"><div style="font-size:20px;margin-bottom:3px">${c.e}</div>${c.name}</div>`;
+  }).join('');
+  document.getElementById('ing-grid2').innerHTML=INGS.map(i=>{
+    const st=p.ingredients[i.id]||'neutral';
+    return`<div class="ic2 ${st==='loved'?'loved':st==='disliked'?'disliked':''}" onclick="togIng('${i.id}')">${i.e} ${i.n}</div>`;
+  }).join('');
+  document.getElementById('rec-hist').innerHTML=REC.slice(0,5).map(r=>{
+    const rating=p.ratings[r.id]||0;
+    const cnt=hist.filter(h=>h.id===r.id).length;
+    return`<div class="rhi"><span style="font-size:18px">${r.emoji}</span><span style="font-weight:600;flex:1">${r.name}</span>${cnt>0?`<span style="font-size:9px;font-weight:700;padding:2px 6px;border-radius:10px;background:var(--pub);color:var(--pu);margin-left:4px">${cnt}x</span>`:''}<div>${[1,2,3,4,5].map(n=>`<span class="str ${n<=rating?'on':''}" onclick="setRating(${r.id},${n})">⭐</span>`).join('')}</div></div>`;
+  }).join('');
+  renderLtags();
+}
+
+function switchProf(u){curProf=u;renderProfile()}
+function togCuis(id){const p=prefs[curProf];const s=['neutral','loved','disliked'];const c=p.cuisines[id]||'neutral';p.cuisines[id]=s[(s.indexOf(c)+1)%3];save();renderProfile();showT(p.cuisines[id]==='loved'?'❤️ מטבח אהוב':'🚫 מועדף להימנע')}
+function togIng(id){const p=prefs[curProf];const s=['neutral','loved','disliked'];const c=p.ingredients[id]||'neutral';p.ingredients[id]=s[(s.indexOf(c)+1)%3];save();renderProfile();renderRec();}
+function updSl(k,v){const p=prefs[curProf];p.sliders[k]=parseInt(v);document.getElementById('sv-'+k).textContent=SL_LABS[k][v-1];save();}
+function setRating(rid,stars){const p=prefs[curProf];p.ratings[rid]=stars;save();renderProfile();showT('⭐ דירוג נשמר!')}
+function renderLtags(){
+  const p=prefs[curProf];
+  const loved=INGS.filter(i=>p.ingredients[i.id]==='loved').map(i=>`<span class="ltag lt-l">❤️ ${i.n}</span>`);
+  const avoid=INGS.filter(i=>p.ingredients[i.id]==='disliked').map(i=>`<span class="ltag lt-a">🚫 ${i.n}</span>`);
+  const el=document.getElementById('ltags');
+  if(el)el.innerHTML=[...loved,...avoid].join('')||'<span style="font-size:11px;color:var(--t3)">הגדר העדפות למעלה</span>';
+}
+
+async function genInsight(){
+  const btn=document.getElementById('ins-btn');
+  btn.disabled=true;btn.textContent='⏳ מנתח...';
+  const p=prefs[curProf];
+  const loved=INGS.filter(i=>p.ingredients[i.id]==='loved').map(i=>i.n).join(', ');
+  const avoid=INGS.filter(i=>p.ingredients[i.id]==='disliked').map(i=>i.n).join(', ');
+  const lovCuis=CUISINES.filter(c=>p.cuisines[c.id]==='loved').map(c=>c.name).join(', ');
+  const topRec=REC.filter(r=>p.ratings[r.id]>=4).map(r=>r.name).join(', ');
+  const lowRec=REC.filter(r=>p.ratings[r.id]>0&&p.ratings[r.id]<=2).map(r=>r.name).join(', ');
+  const name=curProf==='noga'?'נגה':'אני';
+  const diet=curProf==='noga'?'צמחונית':'ללא דגים';
+  try{
+    const r=await fetch('https://api.anthropic.com/v1/messages',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      model:'claude-sonnet-4-20250514',max_tokens:500,
+      system:`אתה תזונאי ומומחה UX. נתח העדפות משתמש ותן 3 תובנות קצרות בעברית. כל תובנה: **emoji נושא**: משפט אחד.`,
+      messages:[{role:'user',content:`${name}, ${diet}. אוהב: ${loved||'לא צוין'}. נמנע מ: ${avoid||'כלום'}. מטבח: ${lovCuis||'לא צוין'}. מתכונים טובים: ${topRec||'לא דורגו'}. פחות אהוב: ${lowRec||'לא צוין'}.`}]
+    })});
+    const data=await r.json();
+    const txt=data.content?.find(c=>c.type==='text')?.text||'שגיאה';
+    document.getElementById('ai-insight').innerHTML=`<div class="ai-box"><div class="ai-txt">${txt.replace(/\*\*(.+?)\*\*/g,'<b>$1</b>').replace(/\n/g,'<br>')}</div></div>`;
+    renderLtags();
+  }catch(e){document.getElementById('ai-insight').innerHTML='<span style="color:var(--re);font-size:11px">שגיאת חיבור</span>'}
+  btn.disabled=false;btn.textContent='🤖 נתח את הפרופיל שלי';
+}
+
+function scheduleNotif(){
+  if(typeof Notification!=='undefined'&&Notification.permission==='granted'){
+    const expiring=inv.filter(i=>DL(i.exp)===1&&i.qty>0);
+    if(expiring.length)setTimeout(()=>new Notification('🍳 מטבח חכם',{body:`מחר פוגים: ${expiring.map(i=>i.name).join(', ')}`}),3000);
+  }
+}
+
+function openModal(){
+  document.getElementById('fn').value='';document.getElementById('fq').value=1;
+  document.getElementById('fu').value='';document.getElementById('fd').value=MDS(7);document.getElementById('fp').value='';
+  selEmoji='🥚';selCatF='fridge';
+  document.getElementById('eg').innerHTML=EMOJIS.map(e=>`<div class="eo ${e===selEmoji?'sel':''}" onclick="selE('${e}',this)">${e}</div>`).join('');
+  document.querySelectorAll('.co').forEach(el=>el.classList.toggle('sel',el.dataset.c==='fridge'));
+  document.getElementById('mov').classList.add('open');
+}
+function closeM(id){document.getElementById(id).classList.remove('open')}
+function selE(e,el){selEmoji=e;document.querySelectorAll('.eo').forEach(x=>x.classList.remove('sel'));el.classList.add('sel')}
+function selC(el){selCatF=el.dataset.c;document.querySelectorAll('.co').forEach(x=>x.classList.remove('sel'));el.classList.add('sel')}
+function saveItem(){
+  const name=document.getElementById('fn').value.trim();
+  if(!name){showT('⚠️ נא להזין שם פריט');return}
+  const price=parseFloat(document.getElementById('fp').value)||0;
+  inv.push({id:nid++,name,emoji:selEmoji,qty:parseInt(document.getElementById('fq').value)||1,unit:document.getElementById('fu').value.trim()||'יחידות',cat:selCatF,exp:document.getElementById('fd').value||MDS(30),price});
+  save();closeM('mov');renderInv();showT('✅ '+name+' נוסף!');
+}
+
+function sv(v){
+  curV=v;
+  document.querySelectorAll('.vw').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.ni').forEach(x=>x.classList.remove('active'));
+  document.getElementById('view-'+v).classList.add('active');
+  document.getElementById('nav-'+v).classList.add('active');
+  const T2={morning:['בוקר טוב 🌅','סיכום יומי'],inventory:['מלאי המטבח','ניהול ומעקב'],today:['מה לבשל היום?','AI מחליט'],recipes:['מתכונים','מסודרים לפי פרופיל'],shopping:['רשימת קניות','ניהול ושיתוף'],profile:['פרופיל למידה','ה-AI לומד עליכם']};
+  document.getElementById('vt').textContent=T2[v][0];document.getElementById('vs').textContent=T2[v][1];
+  document.getElementById('tadd').style.display=v==='inventory'?'flex':'none';
+  renderAll();
+}
+function setCat(c){curCat=c;document.querySelectorAll('#itabs .tab').forEach((t,i)=>t.classList.toggle('active',['all','fridge','pantry','produce','expiring'][i]===c));renderInv()}
+function setRF(f){curRF=f;document.querySelectorAll('#rtabs .tab').forEach((t,i)=>t.classList.toggle('active',['all','starred','veg','available','match'][i]===f));renderRec()}
+function setU(u){curU=u;['both','noga','me'].forEach(x=>{const el=document.getElementById('u-'+x);if(el)el.classList.toggle('active',x===u)});renderAll()}
+function showT(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600)}
+function renderAll(){
+  if(curV==='morning')renderMorning();
+  else if(curV==='inventory')renderInv();
+  else if(curV==='recipes')renderRec();
+  else if(curV==='shopping')renderShop();
+  else if(curV==='profile')renderProfile();
+}
+
+renderAll();
+</script>
+</body></html>
